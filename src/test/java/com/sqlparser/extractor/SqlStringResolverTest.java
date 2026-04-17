@@ -221,12 +221,15 @@ class SqlStringResolverTest {
 
     private String resolveFirstQueryArg(String code) {
         CompilationUnit cu = StaticJavaParser.parse(code);
-        MethodDeclaration method = cu.findFirst(MethodDeclaration.class).orElseThrow();
 
-        MethodCallExpr call = method.findFirst(MethodCallExpr.class,
+        // Find the call anywhere in the CU, then climb to its enclosing method.
+        // (findFirst(MethodDeclaration) would return the first method in source order,
+        //  which may be a builder helper that doesn't contain the query call.)
+        MethodCallExpr call = cu.findFirst(MethodCallExpr.class,
                 c -> c.getNameAsString().equals("createQuery") ||
                      c.getNameAsString().equals("createNativeQuery")).orElseThrow();
 
+        MethodDeclaration method = call.findAncestor(MethodDeclaration.class).orElseThrow();
         Expression firstArg = call.getArguments().get(0);
         return resolver.resolve(firstArg, method);
     }

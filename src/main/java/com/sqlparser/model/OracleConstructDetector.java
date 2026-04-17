@@ -260,8 +260,9 @@ public class OracleConstructDetector {
             "Oracle SYS_GUID() → PostgreSQL gen_random_uuid()", true),
 
         new OracleConstruct("USER",
-            // Careful: USER is also a table name in some schemas; match as function or standalone keyword
-            Pattern.compile("\\bUSER\\s*(?:\\(\\)|(?=[,\\s;)]))", Pattern.CASE_INSENSITIVE),
+            // Case-sensitive: Oracle USER pseudocolumn is written ALL CAPS in SQL.
+            // Using CASE_INSENSITIVE would match JPA entity names like "User" / "UserDto".
+            Pattern.compile("\\bUSER\\s*(?:\\(\\)|(?=[,\\s;)]))"),
             "Oracle USER function → PostgreSQL CURRENT_USER", false),
 
         // ── Additional Oracle types / hints ───────────────────────────────────

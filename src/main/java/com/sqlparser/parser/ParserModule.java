@@ -37,7 +37,7 @@ public class ParserModule {
 
     public ParserModule(Path sourceRoot, boolean enableSymbolSolver) {
         config = new ParserConfiguration();
-        config.setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21);
+        config.setLanguageLevel(ParserConfiguration.LanguageLevel.BLEEDING_EDGE);
 
         if (enableSymbolSolver && sourceRoot != null && Files.isDirectory(sourceRoot)) {
             try {

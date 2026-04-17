@@ -49,10 +49,21 @@ public class QueryLanguageDetector {
 
     /**
      * FROM PascalCase — entity class name (Java naming convention).
-     * e.g., FROM User u, FROM OrderItem oi, FROM com.example.User u
+     * Requires strict PascalCase: initial uppercase followed by at least one lowercase letter.
+     * This distinguishes "User" (HQL entity) from "USERS" or "USER" (SQL table / Oracle keyword).
+     * e.g., FROM User u, FROM OrderItem oi, FROM com.example.Order o
      */
     private static final Pattern FROM_ENTITY = Pattern.compile(
-            "\\bFROM\\s+([a-z][a-z0-9]*\\.)*[A-Z][a-zA-Z0-9]+(\\s+\\w+)?\\b");
+            "\\bFROM\\s+([a-z][a-z0-9]*\\.)*[A-Z][a-z][a-zA-Z0-9]*(\\s+\\w+)?\\b");
+
+    /**
+     * HQL UPDATE / DELETE — entity name follows UPDATE or DELETE FROM.
+     * Uses strict PascalCase to distinguish from native SQL table names.
+     * e.g., UPDATE User u SET u.active = false
+     *       DELETE FROM Order o WHERE o.expired = true
+     */
+    private static final Pattern HQL_UPDATE_DELETE = Pattern.compile(
+            "\\b(UPDATE|DELETE)\\s+(FROM\\s+)?[A-Z][a-z][a-zA-Z0-9]*(\\s+\\w+)?\\s+(SET|WHERE)\\b");
 
     /**
      * SELECT alias.property in SELECT clause — typical HQL alias.field pattern.
@@ -118,6 +129,7 @@ public class QueryLanguageDetector {
         // ── Priority 4: HQL-specific → strong signal ─────────────────────
         if (JPA_NEW.matcher(trimmed).find()) return QueryLanguage.HQL;
         if (JOIN_FETCH.matcher(trimmed).find()) return QueryLanguage.HQL;
+        if (HQL_UPDATE_DELETE.matcher(trimmed).find()) return QueryLanguage.HQL;
 
         // ── Priority 5: SELECT * → native SQL ────────────────────────────
         if (SELECT_STAR.matcher(trimmed).find()) {
