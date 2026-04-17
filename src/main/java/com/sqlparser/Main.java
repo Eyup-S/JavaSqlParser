@@ -14,6 +14,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.LinkedHashMap;
 
 /**
  * Entry point for the Java SQL Parser tool.
@@ -92,31 +93,42 @@ public class Main {
             log.warn("No queries were found in {} (mode: {})", sourceDir, config.getMode());
         }
 
-        // 3. Export SQL
+        // 3. Export SQL — combined file + split files by (api × lang)
         SqlExporter exporter = new SqlExporter(registry);
-        Path sqlOutput = outputDir.resolve("queries.sql");
+        Path sqlOutput  = outputDir.resolve("queries.sql");
+        Path splitDir   = outputDir.resolve("split");
+        Path registryJson = outputDir.resolve("registry.json");
+        Path reportFile   = outputDir.resolve("report.txt");
+
         exporter.exportToFile(sqlOutput);
+        Map<String, Integer> splitSummary = exporter.exportSplitFiles(splitDir);
 
         // 4. Save registry JSON
-        Path registryJson = outputDir.resolve("registry.json");
         registry.saveToJson(registryJson);
 
         // 5. Export report
-        Path reportFile = outputDir.resolve("report.txt");
         exporter.exportReport(reportFile);
 
         System.out.println();
         System.out.println("Done.");
         System.out.printf("  Mode           : %s%n", config.getMode());
         System.out.printf("  Queries found  : %d%n", registry.size());
-        System.out.printf("  SQL output     : %s%n", sqlOutput.toAbsolutePath());
+        System.out.printf("  Combined SQL   : %s%n", sqlOutput.toAbsolutePath());
         System.out.printf("  Registry JSON  : %s%n", registryJson.toAbsolutePath());
         System.out.printf("  Report         : %s%n", reportFile.toAbsolutePath());
         System.out.println();
-        System.out.println("Next step:");
-        System.out.println("  Run ora2pg on queries.sql — preserve the -- BEGIN_QID / END_QID markers.");
-        System.out.printf("  Then: java -jar parser.jar replace %s <converted.sql> %s%n",
+        System.out.println("Split files (by API × Language):");
+        splitSummary.forEach((file, count) ->
+                System.out.printf("  %-55s  %d queries%n",
+                        splitDir.resolve(file).toAbsolutePath(), count));
+        System.out.println();
+        System.out.println("Next steps:");
+        System.out.println("  1. Run ora2pg on the split files that need conversion (see report.txt).");
+        System.out.println("     Preserve the -- BEGIN_QID / END_QID comment lines.");
+        System.out.println("  2. For each converted file, re-inject:");
+        System.out.printf ("     java -jar parser.jar replace %s <converted_split_file.sql> %s%n",
                 sourceDir, registryJson);
+        System.out.println("     Only queries present in the converted file will be rewritten.");
     }
 
     // ── replace ───────────────────────────────────────────────────────────────
@@ -198,8 +210,8 @@ public class Main {
         Path reportFile = outputDir.resolve("report.txt");
         exporter.exportReport(reportFile);
 
-        System.out.printf("Report written to: %s  (%d queries, mode=%s)%n",
-                reportFile.toAbsolutePath(), registry.size(), config.getMode());
+        System.out.printf("Report written to  : %s%n", reportFile.toAbsolutePath());
+        System.out.printf("Queries found      : %d  (mode=%s)%n", registry.size(), config.getMode());
     }
 
     // ── Argument parsing ──────────────────────────────────────────────────────
