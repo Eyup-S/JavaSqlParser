@@ -217,6 +217,110 @@ class SqlStringResolverTest {
         assertEquals("SELECT * FROM users WHERE 1=1 AND name IS NOT NULL", resolved);
     }
 
+    // ── Case F: StringBuilder / StringBuffer ─────────────────────────────────
+
+    @Test
+    void resolves_stringbuilder_standalone_appends() {
+        String code = """
+                class T {
+                    void m() {
+                        StringBuilder queryBuilder = new StringBuilder();
+                        queryBuilder.append("SELECT * FROM users ");
+                        queryBuilder.append("WHERE status = 'A' ");
+                        queryBuilder.append("AND created_at > SYSDATE");
+                        em.createNativeQuery(queryBuilder.toString(), String.class);
+                    }
+                }
+                """;
+        String resolved = resolveFirstQueryArg(code);
+        assertEquals("SELECT * FROM users WHERE status = 'A' AND created_at > SYSDATE", resolved);
+    }
+
+    @Test
+    void resolves_stringbuffer_standalone_appends() {
+        String code = """
+                class T {
+                    void m() {
+                        StringBuffer sb = new StringBuffer();
+                        sb.append("SELECT id FROM orders ");
+                        sb.append("WHERE ROWNUM < 100");
+                        em.createNativeQuery(sb.toString());
+                    }
+                }
+                """;
+        String resolved = resolveFirstQueryArg(code);
+        assertEquals("SELECT id FROM orders WHERE ROWNUM < 100", resolved);
+    }
+
+    @Test
+    void resolves_stringbuilder_with_constructor_initial_value() {
+        String code = """
+                class T {
+                    void m() {
+                        StringBuilder sb = new StringBuilder("SELECT * FROM users ");
+                        sb.append("WHERE active = 1");
+                        em.createNativeQuery(sb.toString());
+                    }
+                }
+                """;
+        String resolved = resolveFirstQueryArg(code);
+        assertEquals("SELECT * FROM users WHERE active = 1", resolved);
+    }
+
+    @Test
+    void resolves_stringbuilder_chained_appends_in_one_statement() {
+        String code = """
+                class T {
+                    void m() {
+                        StringBuilder sb = new StringBuilder();
+                        sb.append("SELECT id, NVL(name, 'N/A') ").append("FROM users ").append("WHERE active = 1");
+                        em.createNativeQuery(sb.toString());
+                    }
+                }
+                """;
+        String resolved = resolveFirstQueryArg(code);
+        assertEquals("SELECT id, NVL(name, 'N/A') FROM users WHERE active = 1", resolved);
+    }
+
+    @Test
+    void resolves_inline_stringbuilder_chain_with_tostring() {
+        String code = """
+                class T {
+                    void m() {
+                        String sql = new StringBuilder()
+                            .append("SELECT * FROM accounts ")
+                            .append("WHERE balance > 0")
+                            .toString();
+                        em.createNativeQuery(sql);
+                    }
+                }
+                """;
+        String resolved = resolveFirstQueryArg(code);
+        assertEquals("SELECT * FROM accounts WHERE balance > 0", resolved);
+    }
+
+    @Test
+    void resolves_stringbuilder_with_conditional_marks_partial() {
+        String code = """
+                class T {
+                    void m(boolean includeExpired) {
+                        StringBuilder sb = new StringBuilder("SELECT * FROM orders WHERE 1=1 ");
+                        if (includeExpired) {
+                            sb.append("AND expire_date < SYSDATE ");
+                        }
+                        sb.append("ORDER BY id");
+                        em.createNativeQuery(sb.toString());
+                    }
+                }
+                """;
+        // The conditional append is still collected (best-effort — we can't know branch outcome)
+        String resolved = resolveFirstQueryArg(code);
+        assertTrue(resolved.contains("SELECT * FROM orders"),
+                "Should contain base SQL: " + resolved);
+        assertTrue(resolved.contains("ORDER BY id"),
+                "Should contain unconditional append: " + resolved);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private String resolveFirstQueryArg(String code) {
