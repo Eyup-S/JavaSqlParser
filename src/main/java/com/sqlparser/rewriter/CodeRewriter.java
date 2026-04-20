@@ -18,6 +18,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * Rewrites Java source files by replacing original SQL strings with converted SQL.
@@ -166,11 +168,20 @@ public class CodeRewriter {
 
                     String newSql = q.getConvertedSql();
                     if (newSql != null && !newSql.isBlank()) {
-                        Expression replacement = buildReplacement(firstArg, newSql, enclosingMethod);
-                        if (replacement != null) {
-                            call.getArguments().set(0, replacement);
-                            rewriteCount++;
-                            log.debug("Rewrote {} at line {}", q.getId(), callLine);
+                        if (newSql.contains(SqlStringResolver.UNRESOLVED_MARKER)) {
+                            // Partial query — replace only the resolved literal segments
+                            int partialCount = doPartialReplacement(q, enclosingMethod);
+                            if (partialCount > 0) {
+                                rewriteCount++;
+                                log.debug("Partial rewrite {} at line {} ({} segment(s))", q.getId(), callLine, partialCount);
+                            }
+                        } else {
+                            Expression replacement = buildReplacement(firstArg, newSql, enclosingMethod);
+                            if (replacement != null) {
+                                call.getArguments().set(0, replacement);
+                                rewriteCount++;
+                                log.debug("Rewrote {} at line {}", q.getId(), callLine);
+                            }
                         }
                     }
                 }
@@ -230,6 +241,63 @@ public class CodeRewriter {
             return queries.stream()
                     .filter(q -> q.getLine() == line && q.getConvertedSql() != null)
                     .findFirst();
+        }
+
+        /**
+         * Partial replacement for PARTIAL-resolution queries.
+         *
+         * Splits resolvedSql and convertedSql by <<UNRESOLVED>> to get matching segment pairs.
+         * For each pair that differs, finds the string literal(s) in the method that make up
+         * the original segment and replaces them with the converted segment.
+         * Dynamic parts (variables, method calls) between markers are left untouched.
+         */
+        private int doPartialReplacement(QueryInfo q, MethodDeclaration method) {
+            if (method == null) {
+                log.warn("{}: partial replacement skipped — no enclosing method", q.getId());
+                return 0;
+            }
+
+            String marker = SqlStringResolver.UNRESOLVED_MARKER;
+            String[] origParts = q.getResolvedSql().split(Pattern.quote(marker), -1);
+            String[] convParts = q.getConvertedSql().split(Pattern.quote(marker), -1);
+
+            if (origParts.length != convParts.length) {
+                log.warn("{}: partial replacement skipped — marker count mismatch", q.getId());
+                return 0;
+            }
+
+            List<StringLiteralExpr> methodLiterals = method.findAll(StringLiteralExpr.class);
+            int count = 0;
+
+            for (int i = 0; i < origParts.length; i++) {
+                String origSeg = origParts[i].trim();
+                String convSeg = convParts[i].trim();
+
+                if (origSeg.isEmpty() || convSeg.isEmpty() || origSeg.equals(convSeg)) continue;
+
+                // Find literals whose value is contained within this original segment
+                List<StringLiteralExpr> contributing = methodLiterals.stream()
+                        .filter(lit -> {
+                            String val = lit.asString().trim();
+                            return !val.isEmpty() && origSeg.contains(val);
+                        })
+                        .collect(Collectors.toList());
+
+                if (contributing.isEmpty()) {
+                    log.warn("{}: segment {} — no matching literal found in method", q.getId(), i);
+                    continue;
+                }
+
+                // Replace first contributing literal with the full converted segment
+                contributing.get(0).setString(convSeg);
+                // Clear remaining literals that were part of this segment (produced by concatenation)
+                for (int j = 1; j < contributing.size(); j++) {
+                    contributing.get(j).setString("");
+                }
+                count++;
+            }
+
+            return count;
         }
 
         /**

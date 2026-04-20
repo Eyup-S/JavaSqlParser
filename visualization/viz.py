@@ -123,6 +123,38 @@ with st.sidebar:
             st.rerun()
 
     st.divider()
+    st.markdown("#### Export converted SQL")
+    st.caption(
+        "Generates a SQL file with BEGIN_QID/END_QID markers from all queries "
+        "that have a **Final SQL** set. Pass this file to the Java `replace` command.\n\n"
+        "Partial queries (containing `<<UNRESOLVED>>`) are included — "
+        "the replace command will fix only the resolved segments."
+    )
+    export_path = st.text_input("Export file path", value="output/converted_from_review.sql")
+
+    if st.button("📤 Export converted SQL", use_container_width=True):
+        registry = st.session_state.get("registry", [])
+        exportable = [q for q in registry if q.get("convertedSql")]
+        if not exportable:
+            st.warning("No queries with Final SQL set yet.")
+        else:
+            lines = []
+            for q in exportable:
+                file_short = Path(q.get("file", "unknown")).name
+                lines.append(
+                    f"-- BEGIN_QID:{q['id']} | file:{file_short} | "
+                    f"method:{q.get('method','')} | line:{q.get('line','')} | "
+                    f"api:{q.get('queryType','')} | lang:{q.get('queryLanguage','')} | "
+                    f"hash:{q.get('hash','')}"
+                )
+                lines.append(q["convertedSql"] + ";")
+                lines.append(f"-- END_QID:{q['id']}")
+                lines.append("")
+            Path(export_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(export_path).write_text("\n".join(lines), encoding="utf-8")
+            st.success(f"Exported {len(exportable)} queries to `{export_path}`")
+
+    st.divider()
     st.caption(
         "Set up the IntelliJ CLI launcher:\n"
         "**Tools → Create Command-line Launcher**\n\n"
@@ -274,8 +306,8 @@ st.divider()
 API_TYPES  = ["HQL", "NATIVE_SQL", "ANNOTATION"]
 LANG_TYPES = ["HQL", "NATIVE_SQL", "AMBIGUOUS"]
 
-# Title + API/Lang correction + review fields + IntelliJ button
-title_col, api_col, lang_col, status_col, reviewer_col, btn_col = st.columns([2, 1, 1, 2, 2, 1])
+# Title + API/Lang correction + review fields + oracle toggle + IntelliJ button
+title_col, api_col, lang_col, status_col, reviewer_col, oracle_col, btn_col = st.columns([2, 1, 1, 2, 2, 1, 1])
 
 title_col.subheader(f"Query  {q['id']}")
 
@@ -316,6 +348,14 @@ new_reviewer = reviewer_col.text_input(
     value=get_field(q, "reviewedBy"),
     key=f"reviewer_{q['id']}",
 )
+
+with oracle_col:
+    st.markdown("**Oracle flag**")
+    new_oracle = st.toggle(
+        "Needs review",
+        value=bool(q.get("needsManualReview")),
+        key=f"oracle_{q['id']}",
+    )
 
 with btn_col:
     full_path = resolve_file_path(q.get("file", ""), source_root)
@@ -393,9 +433,10 @@ save_col, _ = st.columns([1, 4])
 if save_col.button("💾 Save", type="primary", use_container_width=True, key=f"save_{q['id']}"):
     for orig in queries:
         if orig["id"] == q["id"]:
-            orig["queryType"]    = new_api
-            orig["queryLanguage"] = new_lang
-            orig["ora2pgSql"]    = to_single_line(ora2pg_val) or None
+            orig["queryType"]         = new_api
+            orig["queryLanguage"]     = new_lang
+            orig["needsManualReview"] = new_oracle
+            orig["ora2pgSql"]         = to_single_line(ora2pg_val) or None
             orig["convertedSql"] = to_single_line(final_val)  or None
             orig["reviewStatus"] = new_status or None
             orig["reviewedBy"]   = new_reviewer.strip() or None
