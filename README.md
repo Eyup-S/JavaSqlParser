@@ -131,6 +131,38 @@ The tool writes one SQL file per `api × lang` combination so you can process on
 | `annotation__hql.sql` | `@Query` with HQL | Skip — no conversion needed |
 | `hql__ambiguous.sql` | Cannot determine language | Review manually |
 
+### Language detection — how it works
+
+> **Note:** Language detection is heuristic-based and will not always be correct. Always verify the detected `lang` value in the visualization tool and correct it manually if needed.
+
+The detector runs a 10-step priority chain — first match wins:
+
+| Priority | Rule | Detected as |
+|----------|------|-------------|
+| 1 | Oracle keywords: `SYSDATE`, `ROWNUM`, `NVL`, `CONNECT BY`, `DECODE`, `DUAL`, etc. | `NATIVE_SQL` |
+| 2 | Outer join syntax `(+)` | `NATIVE_SQL` |
+| 3 | Raw SQL keywords: `INSERT INTO`, `UPDATE … SET`, `DELETE FROM`, `CREATE`, `DROP`, `ALTER` | `NATIVE_SQL` |
+| 4 | HQL-specific syntax: `JOIN FETCH`, `NEW com.example.Dto(…)`, `UPDATE Entity SET`, `DELETE FROM Entity WHERE` | `HQL` |
+| 5 | `SELECT *` | `NATIVE_SQL` (HQL does not use `*`) |
+| 6 | `FROM PascalCase` entity name — strict pattern `[A-Z][a-z][a-zA-Z0-9]*` | `HQL` |
+| 7 | `FROM snake_case` or `ALL_CAPS` table name | `NATIVE_SQL` |
+| 8 | camelCase property access (`u.firstName`, `o.createdAt`) | `HQL` |
+| 9 | `alias.property` pattern (`u.name`, `o.id`) | `HQL` |
+| 10 | Underscore names (`user_id`, `created_at`) | `NATIVE_SQL` |
+
+If nothing matches → `AMBIGUOUS`
+
+**Known cases where detection can go wrong:**
+
+- Query has `SELECT *` but targets an HQL entity — step 5 fires before step 6, detected as `NATIVE_SQL`
+- Entity name is all-caps (e.g. `STATUS`, `TYPE`) — matches the table name rule, detected as `NATIVE_SQL`
+- Very short queries with no `FROM` clause — may fall through to `AMBIGUOUS`
+- Mixed queries with both HQL and native fragments — first matching rule wins
+
+If the detected language is wrong, open the query in the visualization tool and correct **API Type** and **Language** manually before saving.
+
+---
+
 ### Typical workflow
 
 ```bash
