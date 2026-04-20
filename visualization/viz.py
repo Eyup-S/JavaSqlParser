@@ -50,8 +50,9 @@ if not os.path.exists(registry_path):
 if "registry" not in st.session_state:
     st.session_state.registry = load_registry(registry_path)
 
-data    = st.session_state.registry
-queries = data.get("queries", [])
+data = st.session_state.registry
+# registry.json is a plain JSON array of query objects
+queries = data if isinstance(data, list) else data.get("queries", [])
 
 # ── Header stats ───────────────────────────────────────────────────────────────
 
@@ -238,21 +239,21 @@ with right:
 
     if save_btn.button("💾 Save", type="primary", use_container_width=True, key=f"save_{q['id']}"):
         new_val = edited.strip() or None
-        for orig in data["queries"]:
+        for orig in queries:
             if orig["id"] == q["id"]:
                 orig["convertedSql"] = new_val
                 break
-        save_registry(data, registry_path)
-        st.session_state.registry = data
+        save_registry(queries, registry_path)
+        st.session_state.registry = queries
         st.toast(f"Saved {q['id']}", icon="✅")
         st.rerun()
 
     if clear_btn.button("🗑️ Clear", use_container_width=True, key=f"clear_{q['id']}"):
-        for orig in data["queries"]:
+        for orig in queries:
             if orig["id"] == q["id"]:
                 orig["convertedSql"] = None
                 break
-        save_registry(data, registry_path)
-        st.session_state.registry = data
+        save_registry(queries, registry_path)
+        st.session_state.registry = queries
         st.toast(f"Cleared {q['id']}", icon="🗑️")
         st.rerun()
