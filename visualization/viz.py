@@ -213,17 +213,18 @@ st.divider()
 
 # ── Filters ────────────────────────────────────────────────────────────────────
 
-fc1, fc2, fc3, fc4, fc5 = st.columns(5)
+fc1, fc2, fc3, fc4, fc5, fc6 = st.columns(6)
 
 api_options    = ["All"] + sorted({q.get("queryType",     "") for q in queries} - {""})
 lang_options   = ["All"] + sorted({q.get("queryLanguage", "") for q in queries} - {""})
 status_options = ["All"] + [s for s in REVIEW_STATUSES if s]
 
-f_api       = fc1.selectbox("API Type",      api_options)
-f_lang      = fc2.selectbox("Language",      lang_options)
-f_status    = fc3.selectbox("Review Status", status_options)
-f_review    = fc4.selectbox("Oracle Review", ["All", "Needs review", "OK"])
-f_converted = fc5.selectbox("Converted",     ["All", "Yes", "No"])
+f_api       = fc1.selectbox("API Type",          api_options)
+f_lang      = fc2.selectbox("Language",          lang_options)
+f_status    = fc3.selectbox("Review Status",     status_options)
+f_review    = fc4.selectbox("Oracle Review",     ["All", "Needs review", "OK"])
+f_converted = fc5.selectbox("Converted",         ["All", "Yes", "No"])
+f_oracle_c  = fc6.selectbox("Oracle Constructs", ["All", "Has constructs", "None"])
 f_search    = st.text_input("🔎 Search  (ID, file, method, reviewer, or SQL keyword)")
 
 filtered = queries
@@ -242,6 +243,10 @@ if f_converted == "Yes":
     filtered = [q for q in filtered if q.get("convertedSql")]
 elif f_converted == "No":
     filtered = [q for q in filtered if not q.get("convertedSql")]
+if f_oracle_c == "Has constructs":
+    filtered = [q for q in filtered if q.get("oracleConstructs")]
+elif f_oracle_c == "None":
+    filtered = [q for q in filtered if not q.get("oracleConstructs")]
 if f_search:
     s = f_search.lower()
     filtered = [
@@ -371,7 +376,7 @@ with btn_col:
             )
 
 # Metadata expander
-with st.expander("Metadata", expanded=False):
+with st.expander("Metadata", expanded=True):
     r1c1, r1c2, r1c3, r1c4 = st.columns(4)
     r1c1.markdown(f"**File**  \n`{q.get('file', '')}`")
     r1c2.markdown(f"**Class**  \n`{q.get('className', '')}`")
