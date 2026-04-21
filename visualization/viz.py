@@ -332,7 +332,7 @@ q = filtered[selected_rows[0]]
 
 st.divider()
 
-API_TYPES  = ["HQL", "NATIVE_SQL", "ANNOTATION"]
+API_TYPES  = ["HQL", "NATIVE_SQL", "ANNOTATION", "JDBC"]
 LANG_TYPES = ["HQL", "NATIVE_SQL", "AMBIGUOUS"]
 
 # Title + API/Lang correction + review fields + oracle toggle + IntelliJ button
