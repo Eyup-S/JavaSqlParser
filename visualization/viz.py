@@ -84,13 +84,29 @@ def resolve_file_path(file_field: str, src_root: str) -> str:
 def get_field(q: dict, key: str, default="") -> str:
     return q.get(key) or default
 
+def extract_module(file_path: str, part_idx: int) -> str:
+    if not file_path:
+        return "unknown"
+    parts = file_path.replace("\\", "/").split("/")
+    # part_idx is 1-based; keep empty parts so the index matches the user's intuition
+    # e.g. "/a/b/c" → ['', 'a', 'b', 'c'], part 2 = 'a'
+    if len(parts) >= part_idx:
+        return parts[part_idx - 1] or "unknown"
+    return "unknown"
+
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 
 with st.sidebar:
     st.title("⚙️ Config")
-    registry_path = st.text_input("registry.json path", "output/registry.json")
-    source_root   = st.text_input("Source root (for relative paths)", "src/main/java")
-    idea_cmd      = st.text_input("IntelliJ command", "idea")
+    registry_path  = st.text_input("registry.json path", "output/registry.json")
+    source_root    = st.text_input("Source root (for relative paths)", "src/main/java")
+    idea_cmd       = st.text_input("IntelliJ command", "idea")
+    module_part_idx = st.number_input(
+        "Module name: part index in file path (1-based)",
+        min_value=1, max_value=20, value=7, step=1,
+        help="Split the file path by '/' and take this part as the module name. "
+             "e.g. index 7 on '/a/b/c/d/e/f/module/src/...' → 'module'"
+    )
 
     if st.button("🔄 Reload from disk", use_container_width=True):
         st.session_state.pop("registry", None)
@@ -225,7 +241,13 @@ f_status    = fc3.selectbox("Review Status",     status_options)
 f_review    = fc4.selectbox("Oracle Review",     ["All", "Needs review", "OK"])
 f_converted = fc5.selectbox("Converted",         ["All", "Yes", "No"])
 f_oracle_c  = fc6.selectbox("Oracle Constructs", ["All", "Has constructs", "None"])
-f_search    = st.text_input("🔎 Search  (ID, file, method, reviewer, or SQL keyword)")
+
+module_options = ["All"] + sorted({
+    extract_module(q.get("file", ""), module_part_idx) for q in queries
+} - {"unknown", ""})
+f_module = st.selectbox("Module", module_options)
+
+f_search = st.text_input("🔎 Search  (ID, file, method, reviewer, or SQL keyword)")
 
 filtered = queries
 
@@ -247,6 +269,8 @@ if f_oracle_c == "Has constructs":
     filtered = [q for q in filtered if q.get("oracleConstructs")]
 elif f_oracle_c == "None":
     filtered = [q for q in filtered if not q.get("oracleConstructs")]
+if f_module != "All":
+    filtered = [q for q in filtered if extract_module(q.get("file", ""), module_part_idx) == f_module]
 if f_search:
     s = f_search.lower()
     filtered = [
