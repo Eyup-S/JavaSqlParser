@@ -107,6 +107,16 @@ public class QueryExtractor {
             "batchUpdate"
     );
 
+    // ── Raw JDBC methods — first arg is SQL string ────────────────────────────────────────────
+    // prepareStatement / prepareCall: Connection.prepareStatement(sql) — captures SQL for PreparedStatement
+    // executeQuery / executeUpdate: Statement.executeQuery(sql) — raw Statement (no-arg form on PreparedStatement is skipped)
+    private static final Set<String> JDBC_METHODS = Set.of(
+            "prepareStatement",
+            "prepareCall",
+            "executeQuery",
+            "executeUpdate"
+    );
+
     private final QueryRegistry registry;
     private final SqlStringResolver resolver;
     private final ScanConfig scanConfig;
@@ -178,13 +188,13 @@ public class QueryExtractor {
 
         @Override
         public void visit(NormalAnnotationExpr annotation, Void arg) {
-            processAnnotation(annotation);
+            if (scanConfig.includesHibernate()) processAnnotation(annotation);
             super.visit(annotation, arg);
         }
 
         @Override
         public void visit(SingleMemberAnnotationExpr annotation, Void arg) {
-            processAnnotation(annotation);
+            if (scanConfig.includesHibernate()) processAnnotation(annotation);
             super.visit(annotation, arg);
         }
 
@@ -235,12 +245,18 @@ public class QueryExtractor {
         public void visit(MethodCallExpr call, Void arg) {
             String methodName = call.getNameAsString();
 
-            if (HQL_METHODS.contains(methodName)) {
-                handleQueryCall(call, QueryInfo.QueryType.HQL);
-            } else if (NATIVE_METHODS.contains(methodName)) {
-                handleQueryCall(call, QueryInfo.QueryType.NATIVE_SQL);
-            } else if (JDBC_TEMPLATE_METHODS.contains(methodName)) {
-                handleJdbcTemplateCall(call);
+            if (scanConfig.includesHibernate()) {
+                if (HQL_METHODS.contains(methodName)) {
+                    handleQueryCall(call, QueryInfo.QueryType.HQL);
+                } else if (NATIVE_METHODS.contains(methodName)) {
+                    handleQueryCall(call, QueryInfo.QueryType.NATIVE_SQL);
+                } else if (JDBC_TEMPLATE_METHODS.contains(methodName)) {
+                    handleJdbcTemplateCall(call);
+                }
+            }
+
+            if (scanConfig.includesJdbc() && JDBC_METHODS.contains(methodName)) {
+                handleJdbcCall(call);
             }
 
             super.visit(call, arg);
@@ -288,6 +304,32 @@ public class QueryExtractor {
 
             tryRegister(resolvedSql, parsedFile, currentClassName(), enclosingMethodName,
                     line, QueryInfo.QueryType.NATIVE_SQL, enclosingMethod);
+        }
+
+        /**
+         * Raw JDBC methods: prepareStatement(sql), prepareCall(sql), executeQuery(sql), executeUpdate(sql).
+         * All require a non-empty string first argument that looks like SQL.
+         * PreparedStatement.executeQuery() / executeUpdate() with no args are invisible here
+         * (they have 0 arguments and will be skipped by the isEmpty() guard).
+         */
+        private void handleJdbcCall(MethodCallExpr call) {
+            if (call.getArguments().isEmpty()) return;
+
+            Expression firstArg = call.getArguments().get(0);
+            int line = call.getBegin().map(p -> p.line).orElse(-1);
+            MethodDeclaration enclosingMethod = call.findAncestor(MethodDeclaration.class).orElse(null);
+            String enclosingMethodName = enclosingMethod != null ? enclosingMethod.getNameAsString() : "<static>";
+
+            String resolvedSql = enclosingMethod != null
+                    ? resolver.resolve(firstArg, enclosingMethod)
+                    : SqlStringResolver.UNRESOLVED_MARKER;
+
+            if (resolvedSql.equals(SqlStringResolver.UNRESOLVED_MARKER) || !looksLikeSql(resolvedSql)) {
+                return;
+            }
+
+            tryRegister(resolvedSql, parsedFile, currentClassName(), enclosingMethodName,
+                    line, QueryInfo.QueryType.JDBC, enclosingMethod);
         }
 
         // ── Registration with scan-mode filtering ─────────────────────────────

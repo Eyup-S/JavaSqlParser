@@ -107,6 +107,60 @@ class ScanConfigTest {
         assertFalse(config.shouldInclude(""));
     }
 
+    // ── SourceMode ────────────────────────────────────────────────────────────
+
+    @Test
+    void source_mode_defaults_to_all_in_legacy_factory() {
+        ScanConfig config = ScanConfig.allQueries();
+        assertTrue(config.includesHibernate());
+        assertTrue(config.includesJdbc());
+        assertEquals(ScanConfig.SourceMode.ALL, config.getSourceMode());
+    }
+
+    @Test
+    void source_mode_hibernate_only_includes_hibernate_not_jdbc() {
+        ScanConfig config = ScanConfig.of(ScanConfig.ScanMode.ALL, ScanConfig.SourceMode.HIBERNATE_ONLY, null, false);
+        assertTrue(config.includesHibernate());
+        assertFalse(config.includesJdbc());
+    }
+
+    @Test
+    void source_mode_jdbc_only_includes_jdbc_not_hibernate() {
+        ScanConfig config = ScanConfig.of(ScanConfig.ScanMode.ALL, ScanConfig.SourceMode.JDBC_ONLY, null, false);
+        assertFalse(config.includesHibernate());
+        assertTrue(config.includesJdbc());
+    }
+
+    @Test
+    void source_mode_all_includes_both() {
+        ScanConfig config = ScanConfig.of(ScanConfig.ScanMode.ALL, ScanConfig.SourceMode.ALL, null, false);
+        assertTrue(config.includesHibernate());
+        assertTrue(config.includesJdbc());
+    }
+
+    // ── AppendMode ────────────────────────────────────────────────────────────
+
+    @Test
+    void append_mode_false_by_default() {
+        assertFalse(ScanConfig.allQueries().isAppendMode());
+        assertFalse(ScanConfig.oracleOnly().isAppendMode());
+        assertFalse(ScanConfig.of(ScanConfig.ScanMode.ALL, null).isAppendMode());
+    }
+
+    @Test
+    void append_mode_true_when_set() {
+        ScanConfig config = ScanConfig.of(ScanConfig.ScanMode.ALL, ScanConfig.SourceMode.JDBC_ONLY, null, true);
+        assertTrue(config.isAppendMode());
+    }
+
+    @Test
+    void toString_includes_source_and_append() {
+        ScanConfig config = ScanConfig.of(ScanConfig.ScanMode.ALL, ScanConfig.SourceMode.JDBC_ONLY, null, true);
+        String s = config.toString();
+        assertTrue(s.contains("JDBC_ONLY"), "toString should include source mode");
+        assertTrue(s.contains("append=true"), "toString should include append flag");
+    }
+
     @Test
     void oracle_only_mode_includes_each_keyword_from_spec() {
         ScanConfig config = ScanConfig.oracleOnly();

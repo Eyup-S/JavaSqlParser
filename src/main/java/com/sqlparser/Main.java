@@ -86,6 +86,18 @@ public class Main {
 
         // 2. Extract (with scan mode filter)
         QueryRegistry registry = new QueryRegistry();
+
+        // In append mode, load the existing registry first so duplicate locations are skipped
+        if (config.isAppendMode()) {
+            Path existingRegistry = outputDir.resolve("registry.json");
+            if (Files.isRegularFile(existingRegistry)) {
+                registry.loadFromJson(existingRegistry);
+                log.info("Append mode: loaded {} existing queries from {}", registry.size(), existingRegistry);
+            } else {
+                log.warn("Append mode: no existing registry.json found at {} — starting fresh", existingRegistry);
+            }
+        }
+
         QueryExtractor extractor = new QueryExtractor(registry, config);
         extractor.extractAll(parsedFiles);
 
@@ -112,7 +124,9 @@ public class Main {
         System.out.println();
         System.out.println("Done.");
         System.out.printf("  Mode           : %s%n", config.getMode());
-        System.out.printf("  Queries found  : %d%n", registry.size());
+        System.out.printf("  Source         : %s%n", config.getSourceMode());
+        System.out.printf("  Append         : %s%n", config.isAppendMode());
+        System.out.printf("  Queries total  : %d%n", registry.size());
         System.out.printf("  Combined SQL   : %s%n", sqlOutput.toAbsolutePath());
         System.out.printf("  Registry JSON  : %s%n", registryJson.toAbsolutePath());
         System.out.printf("  Report         : %s%n", reportFile.toAbsolutePath());
@@ -217,11 +231,13 @@ public class Main {
     // ── Argument parsing ──────────────────────────────────────────────────────
 
     /**
-     * Parses --mode and --exclude flags from anywhere in the args array.
+     * Parses --mode, --source, --append, and --exclude flags from anywhere in the args array.
      */
     private static ScanConfig parseScanConfig(String[] args) {
         ScanConfig.ScanMode mode = ScanConfig.ScanMode.ALL;
+        ScanConfig.SourceMode sourceMode = ScanConfig.SourceMode.ALL;
         String excludePattern = null;
+        boolean appendMode = false;
 
         for (String arg : args) {
             if (arg.startsWith("--mode=")) {
@@ -232,12 +248,23 @@ public class Main {
                     default -> throw new IllegalArgumentException(
                             "Unknown mode '" + val + "'. Use: --mode=all  or  --mode=oracle-only");
                 };
+            } else if (arg.startsWith("--source=")) {
+                String val = arg.substring("--source=".length()).trim().toLowerCase();
+                sourceMode = switch (val) {
+                    case "all"      -> ScanConfig.SourceMode.ALL;
+                    case "hibernate", "hibernate-only" -> ScanConfig.SourceMode.HIBERNATE_ONLY;
+                    case "jdbc", "jdbc-only"           -> ScanConfig.SourceMode.JDBC_ONLY;
+                    default -> throw new IllegalArgumentException(
+                            "Unknown source '" + val + "'. Use: --source=all  --source=hibernate  --source=jdbc");
+                };
+            } else if (arg.equals("--append")) {
+                appendMode = true;
             } else if (arg.startsWith("--exclude=")) {
                 excludePattern = arg.substring("--exclude=".length());
             }
         }
 
-        return ScanConfig.of(mode, excludePattern);
+        return ScanConfig.of(mode, sourceMode, excludePattern, appendMode);
     }
 
     /**
@@ -294,6 +321,14 @@ public class Main {
                   --mode=all          Extract all detected queries (default)
                   --mode=oracle-only  Extract only queries containing Oracle-specific keywords
 
+                  --source=all        Extract Hibernate/JPA, JdbcTemplate, and raw JDBC (default)
+                  --source=hibernate  Extract only Hibernate/JPA and JdbcTemplate calls
+                  --source=jdbc       Extract only raw JDBC (prepareStatement, executeQuery, ...)
+
+                  --append            Append mode: load existing registry.json first, skip already-known
+                                      locations — use when you want to add JDBC queries to an existing
+                                      Hibernate-only registry without losing prior review state
+
                   --exclude=<regex>   Skip Java files whose absolute path matches the regex
                                       Applied before parsing — entire file is excluded
                                       Examples:
@@ -302,14 +337,17 @@ public class Main {
                                         --exclude=.*(Test|Spec|IT)\\.java$
 
                 Examples:
-                  # Extract all queries
+                  # Extract all queries (Hibernate + JdbcTemplate + JDBC)
                   java -jar parser.jar extract src/main/java
 
                   # Extract only Oracle-tainted queries, skip test files
                   java -jar parser.jar extract src/main/java output --mode=oracle-only --exclude=.*Test.*
 
-                  # Extract into custom output dir
-                  java -jar parser.jar extract src/main/java output/sql --mode=all
+                  # First run — Hibernate only
+                  java -jar parser.jar extract src/main/java output --source=hibernate
+
+                  # Second run — append JDBC queries to same registry
+                  java -jar parser.jar extract src/main/java output --source=jdbc --append
 
                   # Re-inject after ora2pg conversion
                   java -jar parser.jar replace src/main/java output/converted.sql output/registry.json

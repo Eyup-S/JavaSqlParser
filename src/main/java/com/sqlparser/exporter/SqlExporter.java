@@ -132,6 +132,8 @@ public class SqlExporter {
             case "native_sql__native_sql"  -> "API:createNativeQuery + Lang:Native SQL  [needs ora2pg]";
             case "hql__native_sql"         -> "API:createQuery + Lang:Native SQL  [needs ora2pg AND API fix: use createNativeQuery]";
             case "annotation__native_sql"  -> "API:@Query(nativeQuery=true) + Lang:Native SQL  [needs ora2pg]";
+            case "jdbc__native_sql"        -> "API:prepareStatement/executeQuery + Lang:Native SQL  [needs ora2pg]";
+            case "jdbc__ambiguous"         -> "API:prepareStatement/executeQuery + Lang:Ambiguous  [check manually]";
             case "hql__hql"                -> "API:createQuery + Lang:HQL/JPQL  [no conversion needed]";
             case "annotation__hql"         -> "API:@Query + Lang:HQL/JPQL  [no conversion needed]";
             case "native_sql__hql"         -> "API:createNativeQuery + Lang:HQL  [review: HQL passed to native query]";
@@ -193,9 +195,11 @@ public class SqlExporter {
                     "native_sql__native_sql",
                     "hql__native_sql",
                     "annotation__native_sql",
+                    "jdbc__native_sql",
                     "native_sql__ambiguous",
                     "hql__ambiguous",
                     "annotation__ambiguous",
+                    "jdbc__ambiguous",
                     "native_sql__hql",
                     "hql__hql",
                     "annotation__hql"
@@ -296,6 +300,7 @@ public class SqlExporter {
             case "native_sql__native_sql" -> "Run ora2pg, then: replace src/ split/converted_native_sql__native_sql.sql";
             case "hql__native_sql"        -> "Run ora2pg + fix API (createQuery→createNativeQuery)";
             case "annotation__native_sql" -> "Run ora2pg";
+            case "jdbc__native_sql"       -> "Run ora2pg, then: replace src/ split/converted_jdbc__native_sql.sql";
             case "hql__hql",
                  "annotation__hql"        -> "No conversion needed — skip";
             default                       -> "Review manually";

@@ -114,6 +114,66 @@ class QueryRegistryTest {
     }
 
     @Test
+    void loadFromJson_restores_location_index(@TempDir Path tempDir) throws IOException {
+        registry.register("/src/Repo.java", "Repo", "findAll", 10,
+                "SELECT * FROM users", "SELECT * FROM users", QueryInfo.QueryType.NATIVE_SQL);
+
+        Path jsonFile = tempDir.resolve("registry.json");
+        registry.saveToJson(jsonFile);
+
+        QueryRegistry reloaded = new QueryRegistry();
+        reloaded.loadFromJson(jsonFile);
+
+        // Location must be in the index so append-mode deduplication works
+        assertTrue(reloaded.isRegisteredByLocation("/src/Repo.java:Repo:findAll:10"),
+                "loadFromJson must restore the location index");
+    }
+
+    @Test
+    void append_mode_skips_already_known_location(@TempDir Path tempDir) throws IOException {
+        // Simulate first run (Hibernate scan)
+        registry.register("/src/Repo.java", "Repo", "findAll", 10,
+                "SELECT * FROM users", "SELECT * FROM users", QueryInfo.QueryType.NATIVE_SQL);
+
+        Path jsonFile = tempDir.resolve("registry.json");
+        registry.saveToJson(jsonFile);
+
+        // Simulate second run (append JDBC scan) — load existing registry first
+        QueryRegistry second = new QueryRegistry();
+        second.loadFromJson(jsonFile);
+
+        // Try to register the exact same location again — should be skipped
+        String locationKey = "/src/Repo.java:Repo:findAll:10";
+        assertTrue(second.isRegisteredByLocation(locationKey),
+                "Loaded registry must recognise the existing location");
+
+        // Registry size stays the same — no duplicate added
+        // (QueryExtractor calls isRegisteredByLocation before register, so we test the guard directly)
+        second.register("/src/Repo.java", "Repo", "findAll", 10,
+                "SELECT * FROM users", "SELECT * FROM users", QueryInfo.QueryType.JDBC);
+        // Both Q0001 (original) and Q0002 (duplicate) are in the map here because register()
+        // itself does not guard — the guard is in QueryExtractor.tryRegister().
+        // What matters is that isRegisteredByLocation returns true BEFORE the second register call.
+        assertEquals(2, second.all().size()); // raw registry allows it; extractor guards it
+    }
+
+    @Test
+    void loadFromJson_does_not_overwrite_location_for_same_file_different_line(@TempDir Path tempDir) throws IOException {
+        registry.register("/src/Repo.java", "Repo", "m", 10, "SELECT 1", "SELECT 1", QueryInfo.QueryType.HQL);
+        registry.register("/src/Repo.java", "Repo", "m", 20, "SELECT 2", "SELECT 2", QueryInfo.QueryType.HQL);
+
+        Path jsonFile = tempDir.resolve("registry.json");
+        registry.saveToJson(jsonFile);
+
+        QueryRegistry reloaded = new QueryRegistry();
+        reloaded.loadFromJson(jsonFile);
+
+        assertTrue(reloaded.isRegisteredByLocation("/src/Repo.java:Repo:m:10"));
+        assertTrue(reloaded.isRegisteredByLocation("/src/Repo.java:Repo:m:20"));
+        assertFalse(reloaded.isRegisteredByLocation("/src/Repo.java:Repo:m:30"));
+    }
+
+    @Test
     void counter_resumes_after_load(@TempDir Path tempDir) throws IOException {
         registry.register("X.java", "X", "m", 1, "S1", "S1", QueryInfo.QueryType.HQL);
         registry.register("X.java", "X", "m", 2, "S2", "S2", QueryInfo.QueryType.HQL);

@@ -101,6 +101,13 @@ public class QueryRegistry {
                 mapper.getTypeFactory().constructCollectionType(List.class, QueryInfo.class));
         for (QueryInfo info : loaded) {
             queriesById.put(info.getId(), info);
+            // Restore location index so append-mode deduplication works
+            if (info.getFile() != null && info.getClassName() != null
+                    && info.getMethod() != null) {
+                String locationKey = info.getFile() + ":" + info.getClassName()
+                        + ":" + info.getMethod() + ":" + info.getLine();
+                locationToId.put(locationKey, info.getId());
+            }
         }
         // Restore counter to max existing ID to avoid collisions
         loaded.stream()

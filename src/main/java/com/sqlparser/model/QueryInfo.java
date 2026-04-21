@@ -14,7 +14,8 @@ public class QueryInfo {
     public enum QueryType {
         HQL,           // createQuery() — JPQL/HQL
         NATIVE_SQL,    // createNativeQuery()
-        ANNOTATION     // @Query annotation
+        ANNOTATION,    // @Query annotation
+        JDBC           // prepareStatement / executeQuery — raw JDBC
     }
 
     private String id;
