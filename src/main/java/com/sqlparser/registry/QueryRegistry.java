@@ -2,6 +2,8 @@ package com.sqlparser.registry;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sqlparser.model.QueryInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,6 +26,9 @@ public class QueryRegistry {
 
     private final Map<String, QueryInfo> queriesById = new LinkedHashMap<>();
     private final Map<String, String> locationToId = new HashMap<>();
+    // Preserves raw JSON nodes for entries loaded from file so that Python-added fields
+    // (reviewStatus, reviewedBy, ora2pgSql, ...) survive a Java save/load round-trip.
+    private final Map<String, ObjectNode> rawNodes = new LinkedHashMap<>();
     private final AtomicInteger counter = new AtomicInteger(0);
     private final ObjectMapper mapper;
 
@@ -86,21 +91,50 @@ public class QueryRegistry {
 
     /**
      * Serializes the entire registry to a JSON file.
+     *
+     * For entries that were loaded from a previous run, the original raw JSON node is used
+     * as the base and Java-side fields are overlaid on top. This preserves any extra fields
+     * written by external tools (viz.py review state: reviewStatus, reviewedBy, ora2pgSql, …)
+     * that Java does not know about.
+     *
+     * For newly registered entries, the QueryInfo is serialized normally.
      */
     public void saveToJson(Path outputPath) throws IOException {
-        List<QueryInfo> list = new ArrayList<>(queriesById.values());
-        mapper.writeValue(outputPath.toFile(), list);
-        log.info("Registry saved to: {} ({} entries)", outputPath, list.size());
+        ArrayNode result = mapper.createArrayNode();
+
+        for (QueryInfo info : queriesById.values()) {
+            ObjectNode raw = rawNodes.get(info.getId());
+            if (raw != null) {
+                // Start from the raw node (preserves Python-added fields), then overlay
+                // current Java-side values so any Java updates (e.g. convertedSql from
+                // the replace command) are reflected.
+                ObjectNode merged = raw.deepCopy();
+                ObjectNode fresh = (ObjectNode) mapper.valueToTree(info);
+                merged.setAll(fresh); // fresh overwrites matching keys; unknown keys in raw survive
+                result.add(merged);
+            } else {
+                result.add(mapper.valueToTree(info));
+            }
+        }
+
+        mapper.writeValue(outputPath.toFile(), result);
+        log.info("Registry saved to: {} ({} entries)", outputPath, queriesById.size());
     }
 
     /**
-     * Loads a previously serialized registry from JSON and merges (or replaces) entries.
+     * Loads a previously serialized registry from JSON.
+     * Raw JSON nodes are retained so that saveToJson can round-trip unknown fields.
      */
     public void loadFromJson(Path inputPath) throws IOException {
-        List<QueryInfo> loaded = mapper.readValue(inputPath.toFile(),
-                mapper.getTypeFactory().constructCollectionType(List.class, QueryInfo.class));
-        for (QueryInfo info : loaded) {
+        ArrayNode array = (ArrayNode) mapper.readTree(inputPath.toFile());
+
+        for (com.fasterxml.jackson.databind.JsonNode node : array) {
+            ObjectNode objectNode = (ObjectNode) node;
+            QueryInfo info = mapper.treeToValue(objectNode, QueryInfo.class);
+
             queriesById.put(info.getId(), info);
+            rawNodes.put(info.getId(), objectNode);
+
             // Restore location index so append-mode deduplication works
             if (info.getFile() != null && info.getClassName() != null
                     && info.getMethod() != null) {
@@ -109,15 +143,15 @@ public class QueryRegistry {
                 locationToId.put(locationKey, info.getId());
             }
         }
-        // Restore counter to max existing ID to avoid collisions
-        loaded.stream()
-              .map(QueryInfo::getId)
-              .filter(id -> id.matches("Q\\d+"))
-              .mapToInt(id -> Integer.parseInt(id.substring(1)))
-              .max()
-              .ifPresent(max -> counter.set(Math.max(counter.get(), max)));
 
-        log.info("Loaded {} queries from registry: {}", loaded.size(), inputPath);
+        // Restore counter to max existing ID to avoid collisions on newly registered entries
+        queriesById.keySet().stream()
+                   .filter(id -> id.matches("Q\\d+"))
+                   .mapToInt(id -> Integer.parseInt(id.substring(1)))
+                   .max()
+                   .ifPresent(max -> counter.set(Math.max(counter.get(), max)));
+
+        log.info("Loaded {} queries from registry: {}", queriesById.size(), inputPath);
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────

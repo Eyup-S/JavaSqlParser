@@ -1,5 +1,8 @@
 package com.sqlparser.registry;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sqlparser.model.QueryInfo;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -171,6 +174,58 @@ class QueryRegistryTest {
         assertTrue(reloaded.isRegisteredByLocation("/src/Repo.java:Repo:m:10"));
         assertTrue(reloaded.isRegisteredByLocation("/src/Repo.java:Repo:m:20"));
         assertFalse(reloaded.isRegisteredByLocation("/src/Repo.java:Repo:m:30"));
+    }
+
+    @Test
+    void saveToJson_preserves_unknown_fields_added_by_external_tools(@TempDir Path tempDir) throws IOException {
+        // Simulate what viz.py does: save a registry.json that has extra fields
+        // (reviewStatus, reviewedBy, ora2pgSql) Java does not know about.
+        registry.register("X.java", "X", "m", 1, "SELECT SYSDATE FROM DUAL",
+                "SELECT SYSDATE FROM DUAL", QueryInfo.QueryType.NATIVE_SQL);
+
+        Path jsonFile = tempDir.resolve("registry.json");
+        registry.saveToJson(jsonFile);
+
+        // Inject Python-added fields directly into the saved JSON (mimics viz.py saving)
+        ObjectMapper om = new ObjectMapper();
+        ArrayNode array = (ArrayNode) om.readTree(jsonFile.toFile());
+        ObjectNode entry = (ObjectNode) array.get(0);
+        entry.put("reviewStatus", "APPROVED");
+        entry.put("reviewedBy", "alice");
+        entry.put("ora2pgSql", "SELECT NOW() FROM DUAL");
+        om.writeValue(jsonFile.toFile(), array);
+
+        // Java loads and saves again (simulates an append run)
+        QueryRegistry reloaded = new QueryRegistry();
+        reloaded.loadFromJson(jsonFile);
+        reloaded.saveToJson(jsonFile);
+
+        // Python-added fields must still be present
+        ArrayNode saved = (ArrayNode) om.readTree(jsonFile.toFile());
+        ObjectNode savedEntry = (ObjectNode) saved.get(0);
+        assertEquals("APPROVED", savedEntry.path("reviewStatus").asText());
+        assertEquals("alice",    savedEntry.path("reviewedBy").asText());
+        assertEquals("SELECT NOW() FROM DUAL", savedEntry.path("ora2pgSql").asText());
+    }
+
+    @Test
+    void saveToJson_reflects_java_side_updates_on_loaded_entries(@TempDir Path tempDir) throws IOException {
+        // Java-side update (convertedSql set by replace command) must overwrite the raw node value
+        registry.register("X.java", "X", "m", 1, "SELECT SYSDATE FROM DUAL",
+                "SELECT SYSDATE FROM DUAL", QueryInfo.QueryType.NATIVE_SQL);
+
+        Path jsonFile = tempDir.resolve("registry.json");
+        registry.saveToJson(jsonFile);
+
+        QueryRegistry reloaded = new QueryRegistry();
+        reloaded.loadFromJson(jsonFile);
+        reloaded.applyConversions(Map.of("Q0001", "SELECT CURRENT_TIMESTAMP"));
+        reloaded.saveToJson(jsonFile);
+
+        ObjectMapper om = new ObjectMapper();
+        ArrayNode saved = (ArrayNode) om.readTree(jsonFile.toFile());
+        assertEquals("SELECT CURRENT_TIMESTAMP",
+                saved.get(0).path("convertedSql").asText());
     }
 
     @Test
