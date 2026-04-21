@@ -1,8 +1,8 @@
 import json
 import os
 import re
-import subprocess
 from pathlib import Path
+from urllib.parse import quote
 
 import pandas as pd
 import plotly.express as px
@@ -74,12 +74,27 @@ def format_sql(sql: str) -> str:
         indent_width=4,
     )
 
-def resolve_file_path(file_field: str, src_root: str) -> str:
+def detect_registry_prefix(queries: list) -> str:
+    """Best-guess common prefix of absolute file paths stored in the registry."""
+    paths = [q.get("file", "") for q in queries if q.get("file", "").startswith("/")]
+    if not paths:
+        return ""
+    try:
+        return os.path.commonpath(paths)
+    except (ValueError, TypeError):
+        return ""
+
+def resolve_file_path(file_field: str, registry_prefix: str, local_prefix: str) -> str:
+    """
+    Converts a registry file path to the correct local path for this user.
+    If registry_prefix and local_prefix are set, replaces the leading prefix.
+    Falls back to the raw value if no substitution is configured.
+    """
     if not file_field:
         return ""
-    if os.path.isabs(file_field):
-        return file_field
-    return os.path.join(src_root, file_field)
+    if registry_prefix and local_prefix and file_field.startswith(registry_prefix):
+        return local_prefix + file_field[len(registry_prefix):]
+    return file_field
 
 def get_field(q: dict, key: str, default="") -> str:
     return q.get(key) or default
@@ -98,9 +113,7 @@ def extract_module(file_path: str, part_idx: int) -> str:
 
 with st.sidebar:
     st.title("⚙️ Config")
-    registry_path  = st.text_input("registry.json path", "output/registry.json")
-    source_root    = st.text_input("Source root (for relative paths)", "src/main/java")
-    idea_cmd       = st.text_input("IntelliJ command", "idea")
+    registry_path = st.text_input("registry.json path", "output/registry.json")
     module_part_idx = st.number_input(
         "Module name: part index in file path (1-based)",
         min_value=1, max_value=20, value=7, step=1,
@@ -111,6 +124,78 @@ with st.sidebar:
     if st.button("🔄 Reload from disk", use_container_width=True):
         st.session_state.pop("registry", None)
         st.rerun()
+
+    st.divider()
+    st.markdown("#### Open in IntelliJ")
+    st.caption(
+        "Uses IntelliJ's built-in HTTP server (`localhost:63342`). "
+        "Each team member sets **their own** local project root below — "
+        "the link opens on their machine, not the server's."
+    )
+
+    # Auto-detect the stored prefix from registry paths once data is loaded
+    _auto_prefix = detect_registry_prefix(st.session_state.get("registry", []))
+    registry_prefix = st.text_input(
+        "Project root stored in registry",
+        value=_auto_prefix,
+        help="The absolute path prefix that was recorded when extract was run "
+             "(auto-detected from registry paths). Leave blank to use paths as-is.",
+    )
+    local_prefix = st.text_input(
+        "Your local project root",
+        help="Replace the stored prefix with this path on your machine. "
+             "e.g. /home/you/projects/MyProject",
+    )
+    st.markdown("**URL template** — use `{file}` and `{line}` as placeholders")
+    intellij_url_template = st.text_input(
+        "url_template",
+        value="idea://open?file={file}&line={line}",
+        label_visibility="collapsed",
+        help="Use {file} and {line} as placeholders. idea:// works on macOS and on Linux after one-time setup below.",
+    )
+
+    with st.expander("🐧 Ubuntu/Linux first-time setup"):
+        st.markdown(
+            "Snap-installed IntelliJ does not register a browser URL handler automatically. "
+            "Run these commands **once** on each Ubuntu machine to register `idea://`:"
+        )
+        st.code(
+            """\
+mkdir -p ~/.local/bin ~/.local/share/applications
+
+# 1. Wrapper script — parses idea://open?file=...&line=... and calls IntelliJ CLI
+cat > ~/.local/bin/idea-url-handler.sh << 'EOF'
+#!/bin/bash
+URL="$1"
+FILE=$(python3 -c "import sys,urllib.parse; u='$URL'; print(urllib.parse.unquote(u.split('file=')[1].split('&')[0]))")
+LINE=$(python3 -c "u='$URL'; print(u.split('line=')[1] if 'line=' in u else '1')")
+intellij-idea-ultimate --line "$LINE" "$FILE" &
+EOF
+chmod +x ~/.local/bin/idea-url-handler.sh
+
+# 2. .desktop file — registers the handler with the desktop environment
+cat > ~/.local/share/applications/idea-url-handler.desktop << 'EOF'
+[Desktop Entry]
+Name=IntelliJ IDEA URL Handler
+Exec=/home/$USER/.local/bin/idea-url-handler.sh %u
+Terminal=false
+Type=Application
+MimeType=x-scheme-handler/idea;
+EOF
+
+# 3. Register idea:// with xdg
+xdg-mime default idea-url-handler.desktop x-scheme-handler/idea
+update-desktop-database ~/.local/share/applications/
+
+# 4. Test — should open IntelliJ at line 1
+xdg-open "idea://open?file=$HOME/.bashrc&line=1"
+""",
+            language="bash",
+        )
+        st.caption(
+            "After running step 4, your browser should also handle `idea://` links. "
+            "If Chrome/Firefox asks for permission the first time, click **Allow**."
+        )
 
     st.divider()
     st.markdown("#### Import ora2pg output")
@@ -170,11 +255,10 @@ with st.sidebar:
             Path(export_path).write_text("\n".join(lines), encoding="utf-8")
             st.success(f"Exported {len(exportable)} queries to `{export_path}`")
 
-    st.divider()
     st.caption(
-        "Set up the IntelliJ CLI launcher:\n"
-        "**Tools → Create Command-line Launcher**\n\n"
-        "Then `idea` will be available in PATH."
+        "IntelliJ built-in server must be enabled:\n"
+        "**Settings → Build, Execution, Deployment → Debugger → Built-in server**\n\n"
+        "It is on by default in most IntelliJ versions."
     )
 
 # ── Load data ──────────────────────────────────────────────────────────────────
@@ -386,18 +470,20 @@ with oracle_col:
         key=f"oracle_{q['id']}",
     )
 
+local_path = resolve_file_path(q.get("file", ""), registry_prefix, local_prefix)
+line_no    = q.get("line", 1)
+_encoded   = quote(local_path, safe="/")
+
+intellij_url = intellij_url_template.replace("{file}", _encoded).replace("{line}", str(line_no))
+
 with btn_col:
-    full_path = resolve_file_path(q.get("file", ""), source_root)
-    line_no   = str(q.get("line", 1))
-    if st.button("🚀 Open in IntelliJ", type="primary", use_container_width=True):
-        try:
-            subprocess.Popen([idea_cmd, "--line", line_no, full_path])
-            st.toast(f"Opened {Path(full_path).name}:{line_no}")
-        except FileNotFoundError:
-            st.error(
-                f"Command not found: `{idea_cmd}`  \n"
-                "Set up via **Tools → Create Command-line Launcher** in IntelliJ."
-            )
+    st.link_button("🚀 Open in IntelliJ", intellij_url, use_container_width=True, type="primary")
+
+with st.expander("🔗 IntelliJ debug", expanded=False):
+    st.caption(f"**Resolved local path:** `{local_path}`")
+    st.caption(f"**Stored path in registry:** `{q.get('file', '')}`")
+    st.markdown("**Active URL** *(paste into browser to test)*")
+    st.code(intellij_url, language=None)
 
 # Metadata expander
 with st.expander("Metadata", expanded=True):
