@@ -287,7 +287,9 @@ c2.metric("Needs Review",    needs_review)
 c3.metric("Converted",       converted)
 c4.metric("Review Complete", reviewed)
 
-# ── Chart ──────────────────────────────────────────────────────────────────────
+# ── Charts ─────────────────────────────────────────────────────────────────────
+
+chart_col1, chart_col2 = st.columns(2)
 
 combo_counts: dict[str, int] = {}
 for q in queries:
@@ -295,36 +297,65 @@ for q in queries:
     combo_counts[key] = combo_counts.get(key, 0) + 1
 
 if combo_counts:
-    df_chart = pd.DataFrame({
+    df_combo = pd.DataFrame({
         "Combination": list(combo_counts.keys()),
         "Count":       list(combo_counts.values()),
     })
-    fig = px.bar(
-        df_chart, x="Combination", y="Count",
+    fig_combo = px.bar(
+        df_combo, x="Combination", y="Count",
         title="Queries by API × Language",
-        color="Combination",
-        text="Count",
+        color="Combination", text="Count",
     )
-    fig.update_traces(textposition="outside")
-    fig.update_layout(showlegend=False, height=300, margin=dict(t=40, b=0))
-    st.plotly_chart(fig, use_container_width=True)
+    fig_combo.update_traces(textposition="outside")
+    fig_combo.update_layout(showlegend=False, height=320, margin=dict(t=40, b=0))
+    chart_col1.plotly_chart(fig_combo, use_container_width=True)
+
+oracle_counts: dict[str, int] = {}
+for q in queries:
+    for c in q.get("oracleConstructs") or []:
+        oracle_counts[c] = oracle_counts.get(c, 0) + 1
+
+if oracle_counts:
+    df_oracle = pd.DataFrame({
+        "Construct": list(oracle_counts.keys()),
+        "Queries":   list(oracle_counts.values()),
+    }).sort_values("Queries", ascending=False)
+    fig_oracle = px.bar(
+        df_oracle, x="Construct", y="Queries",
+        title="Oracle Constructs — queries affected",
+        color="Queries",
+        color_continuous_scale="Reds",
+        text="Queries",
+    )
+    fig_oracle.update_traces(textposition="outside")
+    fig_oracle.update_layout(showlegend=False, height=320, margin=dict(t=40, b=0),
+                             coloraxis_showscale=False)
+    chart_col2.plotly_chart(fig_oracle, use_container_width=True)
 
 st.divider()
 
 # ── Filters ────────────────────────────────────────────────────────────────────
 
-fc1, fc2, fc3, fc4, fc5, fc6 = st.columns(6)
+fc1, fc2, fc3, fc4, fc5 = st.columns(5)
 
 api_options    = ["All"] + sorted({q.get("queryType",     "") for q in queries} - {""})
 lang_options   = ["All"] + sorted({q.get("queryLanguage", "") for q in queries} - {""})
 status_options = ["All"] + [s for s in REVIEW_STATUSES if s]
 
-f_api       = fc1.selectbox("API Type",          api_options)
-f_lang      = fc2.selectbox("Language",          lang_options)
-f_status    = fc3.selectbox("Review Status",     status_options)
-f_review    = fc4.selectbox("Oracle Review",     ["All", "Needs review", "OK"])
-f_converted = fc5.selectbox("Converted",         ["All", "Yes", "No"])
-f_oracle_c  = fc6.selectbox("Oracle Constructs", ["All", "Has constructs", "None"])
+f_api       = fc1.selectbox("API Type",      api_options)
+f_lang      = fc2.selectbox("Language",      lang_options)
+f_status    = fc3.selectbox("Review Status", status_options)
+f_review    = fc4.selectbox("Oracle Review", ["All", "Needs review", "OK"])
+f_converted = fc5.selectbox("Converted",     ["All", "Yes", "No"])
+
+# Oracle construct multiselect — sorted by frequency so most common appear first
+all_constructs = sorted(oracle_counts.keys(), key=lambda c: -oracle_counts.get(c, 0))
+construct_options = [f"{c} ({oracle_counts[c]})" for c in all_constructs]
+selected_construct_labels = st.multiselect(
+    "Oracle Constructs  (select one or more to filter — shows queries containing ANY selected)",
+    options=construct_options,
+)
+selected_constructs = {lbl.split(" (")[0] for lbl in selected_construct_labels}
 
 module_options = ["All"] + sorted({
     extract_module(q.get("file", ""), module_part_idx) for q in queries
@@ -349,10 +380,8 @@ if f_converted == "Yes":
     filtered = [q for q in filtered if q.get("convertedSql")]
 elif f_converted == "No":
     filtered = [q for q in filtered if not q.get("convertedSql")]
-if f_oracle_c == "Has constructs":
-    filtered = [q for q in filtered if q.get("oracleConstructs")]
-elif f_oracle_c == "None":
-    filtered = [q for q in filtered if not q.get("oracleConstructs")]
+if selected_constructs:
+    filtered = [q for q in filtered if selected_constructs & set(q.get("oracleConstructs") or [])]
 if f_module != "All":
     filtered = [q for q in filtered if extract_module(q.get("file", ""), module_part_idx) == f_module]
 if f_search:
