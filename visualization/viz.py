@@ -1,8 +1,12 @@
 import json
 import os
 import re
+import tempfile
+import time
 from pathlib import Path
 from urllib.parse import quote
+
+from filelock import FileLock, Timeout
 
 import pandas as pd
 import plotly.express as px
@@ -31,8 +35,58 @@ def load_registry(path: str) -> list:
     return raw if isinstance(raw, list) else raw.get("queries", [])
 
 def save_registry(queries: list, path: str):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(queries, f, indent=2, ensure_ascii=False)
+    """Full overwrite — only used for bulk operations (ora2pg import). Acquires file lock."""
+    lock_path = path + ".lock"
+    with FileLock(lock_path, timeout=10):
+        _atomic_write(queries, path)
+
+def save_query(query_id: str, updates: dict, local_version: int, path: str, force: bool = False) -> dict:
+    """
+    Concurrent-safe single-query save with optimistic locking.
+
+    Acquires an exclusive file-level lock, reloads the registry from disk,
+    checks per-query version to detect concurrent edits, then writes atomically.
+
+    Returns a dict:
+      {"status": "ok",       "registry": <list>}
+      {"status": "conflict", "disk_query": <dict>, "registry": <list>}
+      {"status": "timeout"}
+
+    Backward compat: missing version field is treated as version 0.
+    """
+    lock_path = path + ".lock"
+    try:
+        with FileLock(lock_path, timeout=5):
+            current = load_registry(path)
+            target = next((q for q in current if q["id"] == query_id), None)
+            if target is None:
+                return {"status": "ok", "registry": current}
+
+            disk_version = target.get("version", 0)
+            if not force and disk_version != local_version:
+                return {"status": "conflict", "disk_query": dict(target), "registry": current}
+
+            for k, v in updates.items():
+                if v is None:
+                    target.pop(k, None)
+                else:
+                    target[k] = v
+            target["version"] = disk_version + 1
+
+            _atomic_write(current, path)
+            return {"status": "ok", "registry": current}
+    except Timeout:
+        return {"status": "timeout"}
+
+def _atomic_write(data: list, path: str):
+    """Write JSON to a temp file then rename — prevents partial writes."""
+    dir_name = os.path.dirname(os.path.abspath(path))
+    with tempfile.NamedTemporaryFile(
+        "w", dir=dir_name, suffix=".tmp", delete=False, encoding="utf-8"
+    ) as tmp:
+        json.dump(data, tmp, indent=2, ensure_ascii=False)
+        tmp_path = tmp.name
+    os.replace(tmp_path, path)  # atomic on Linux, macOS, Windows
 
 def parse_converted_sql_file(content: str) -> dict[str, str]:
     """
@@ -210,16 +264,18 @@ xdg-open "idea://open?file=$HOME/.bashrc&line=1"
         if not ora2pg_file_path or not os.path.exists(ora2pg_file_path):
             st.error(f"File not found: {ora2pg_file_path}")
         else:
-            content    = Path(ora2pg_file_path).read_text(encoding="utf-8")
-            parsed     = parse_converted_sql_file(content)
-            registry   = st.session_state.get("registry", [])
-            matched    = 0
+            content = Path(ora2pg_file_path).read_text(encoding="utf-8")
+            parsed  = parse_converted_sql_file(content)
+            # Reload from disk before bulk write to pick up any concurrent changes
+            registry = load_registry(registry_path)
+            matched  = 0
             for q in registry:
                 if q["id"] in parsed:
                     q["ora2pgSql"] = parsed[q["id"]]
                     matched += 1
             save_registry(registry, registry_path)
-            st.session_state.registry = registry
+            st.session_state.registry       = registry
+            st.session_state.registry_mtime = os.path.getmtime(registry_path)
             st.success(f"Imported {matched} / {len(parsed)} queries found in file.")
             st.rerun()
 
@@ -267,8 +323,15 @@ if not os.path.exists(registry_path):
     st.error(f"File not found: **{registry_path}**  \nAdjust the path in the sidebar.")
     st.stop()
 
-if "registry" not in st.session_state:
-    st.session_state.registry = load_registry(registry_path)
+_disk_mtime = os.path.getmtime(registry_path)
+if (
+    "registry" not in st.session_state
+    or st.session_state.get("registry_path") != registry_path
+    or st.session_state.get("registry_mtime", 0) < _disk_mtime
+):
+    st.session_state.registry       = load_registry(registry_path)
+    st.session_state.registry_mtime = _disk_mtime
+    st.session_state.registry_path  = registry_path
 
 queries: list = st.session_state.registry
 
@@ -443,6 +506,13 @@ if not selected_rows:
 
 q = filtered[selected_rows[0]]
 
+# Track the version we started editing so optimistic locking can detect concurrent changes.
+# Set once when the query is first selected; NOT reset on mtime auto-reload so the
+# stale-version check still fires if someone else saved while we were editing.
+_version_key = f"editing_version_{q['id']}"
+if _version_key not in st.session_state:
+    st.session_state[_version_key] = q.get("version", 0)
+
 st.divider()
 
 API_TYPES  = ["HQL", "NATIVE_SQL", "ANNOTATION", "JDBC"]
@@ -574,18 +644,79 @@ with col_final:
 st.divider()
 save_col, _ = st.columns([1, 4])
 
+def _do_save(force: bool = False):
+    updates = {
+        "queryType":         new_api,
+        "queryLanguage":     new_lang,
+        "needsManualReview": new_oracle,
+        "ora2pgSql":         to_single_line(ora2pg_val) or None,
+        "convertedSql":      to_single_line(final_val)  or None,
+        "reviewStatus":      new_status or None,
+        "reviewedBy":        new_reviewer.strip() or None,
+    }
+    local_version = st.session_state.get(_version_key, 0)
+    result = save_query(q["id"], updates, local_version, registry_path, force=force)
+
+    if result["status"] == "ok":
+        st.session_state.registry       = result["registry"]
+        st.session_state.registry_mtime = os.path.getmtime(registry_path)
+        # Update tracked version to the newly saved one
+        saved_q = next((x for x in result["registry"] if x["id"] == q["id"]), None)
+        if saved_q:
+            st.session_state[_version_key] = saved_q.get("version", 0)
+        st.session_state.pop(f"_conflict_{q['id']}", None)
+        st.toast(f"Saved {q['id']}", icon="✅")
+        st.rerun()
+    elif result["status"] == "conflict":
+        st.session_state[f"_conflict_{q['id']}"] = {
+            "disk_query": result["disk_query"],
+            "our_updates": updates,
+        }
+        st.session_state.registry       = result["registry"]
+        st.session_state.registry_mtime = os.path.getmtime(registry_path)
+        st.rerun()
+    elif result["status"] == "timeout":
+        st.error("Could not acquire file lock — another process is saving. Try again.")
+
 if save_col.button("💾 Save", type="primary", use_container_width=True, key=f"save_{q['id']}"):
-    for orig in queries:
-        if orig["id"] == q["id"]:
-            orig["queryType"]         = new_api
-            orig["queryLanguage"]     = new_lang
-            orig["needsManualReview"] = new_oracle
-            orig["ora2pgSql"]         = to_single_line(ora2pg_val) or None
-            orig["convertedSql"] = to_single_line(final_val)  or None
-            orig["reviewStatus"] = new_status or None
-            orig["reviewedBy"]   = new_reviewer.strip() or None
-            break
-    save_registry(queries, registry_path)
-    st.session_state.registry = queries
-    st.toast(f"Saved {q['id']}", icon="✅")
-    st.rerun()
+    _do_save(force=False)
+
+# ── Conflict UI ────────────────────────────────────────────────────────────────
+
+conflict = st.session_state.get(f"_conflict_{q['id']}")
+if conflict:
+    disk_q      = conflict["disk_query"]
+    our_updates = conflict["our_updates"]
+
+    st.warning(
+        "⚠️ **Save conflict** — this query was modified by someone else while you were editing. "
+        "Fields that differ are shown below."
+    )
+
+    FIELD_LABELS = {
+        "queryType": "API Type", "queryLanguage": "Language",
+        "needsManualReview": "Oracle flag", "ora2pgSql": "ora2pg Output",
+        "convertedSql": "Final SQL", "reviewStatus": "Review Status",
+        "reviewedBy": "Reviewed By",
+    }
+    diff_fields = [
+        k for k in our_updates
+        if str(our_updates.get(k) or "") != str(disk_q.get(k) or "")
+    ]
+    if diff_fields:
+        col_lbl, col_disk, col_mine = st.columns([1, 2, 2])
+        col_lbl.markdown("**Field**")
+        col_disk.markdown("**On disk (theirs)**")
+        col_mine.markdown("**Your edit**")
+        for k in diff_fields:
+            col_lbl.markdown(FIELD_LABELS.get(k, k))
+            col_disk.code(str(disk_q.get(k) or ""))
+            col_mine.code(str(our_updates.get(k) or ""))
+
+    conflict_btn_col1, conflict_btn_col2, *_ = st.columns([1, 1, 3])
+    if conflict_btn_col1.button("🗑️ Discard mine", key=f"discard_{q['id']}"):
+        st.session_state.pop(f"_conflict_{q['id']}", None)
+        st.session_state.pop(_version_key, None)
+        st.rerun()
+    if conflict_btn_col2.button("🔧 Force save (overwrite theirs)", key=f"force_{q['id']}", type="primary"):
+        _do_save(force=True)
