@@ -1,6 +1,8 @@
+import argparse
 import json
 import os
 import re
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -163,11 +165,24 @@ def extract_module(file_path: str, part_idx: int) -> str:
         return parts[part_idx - 1] or "unknown"
     return "unknown"
 
+# ── CLI args ───────────────────────────────────────────────────────────────────
+# Usage: streamlit run viz.py -- path/to/registry.json
+#    or: streamlit run viz.py -- --registry path/to/registry.json
+
+def _parse_cli() -> str | None:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("registry", nargs="?", default=None)
+    parser.add_argument("--registry", dest="registry_flag", default=None)
+    args, _ = parser.parse_known_args(sys.argv[1:])
+    return args.registry_flag or args.registry
+
+_cli_registry = _parse_cli()
+
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 
 with st.sidebar:
     st.title("⚙️ Config")
-    registry_path = st.text_input("registry.json path", "output/registry.json")
+    registry_path = st.text_input("registry.json path", _cli_registry or "output/registry.json")
     module_part_idx = st.number_input(
         "Module name: part index in file path (1-based)",
         min_value=1, max_value=20, value=7, step=1,
