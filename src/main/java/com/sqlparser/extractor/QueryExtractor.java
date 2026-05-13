@@ -246,9 +246,9 @@ public class QueryExtractor {
             String methodName = call.getNameAsString();
 
             if (scanConfig.includesHibernate()) {
-                if (HQL_METHODS.contains(methodName)) {
+                if (HQL_METHODS.contains(methodName) || scanConfig.getCustomHqlMethods().contains(methodName)) {
                     handleQueryCall(call, QueryInfo.QueryType.HQL);
-                } else if (NATIVE_METHODS.contains(methodName)) {
+                } else if (NATIVE_METHODS.contains(methodName) || scanConfig.getCustomNativeMethods().contains(methodName)) {
                     handleQueryCall(call, QueryInfo.QueryType.NATIVE_SQL);
                 } else if (JDBC_TEMPLATE_METHODS.contains(methodName)) {
                     handleJdbcTemplateCall(call);
@@ -340,8 +340,8 @@ public class QueryExtractor {
 
             if (resolvedSql == null || resolvedSql.isBlank()) return;
 
-            // De-duplicate by location
-            String locationKey = file.fileName() + ":" + className + ":" + methodName + ":" + line;
+            // De-duplicate by location — must use full path to match what registry.register() stores
+            String locationKey = file.path().toString() + ":" + className + ":" + methodName + ":" + line;
             if (registry.isRegisteredByLocation(locationKey)) return;
 
             // ── SCAN MODE FILTER ──────────────────────────────────────────────

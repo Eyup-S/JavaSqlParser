@@ -530,7 +530,7 @@ if _version_key not in st.session_state:
 
 st.divider()
 
-API_TYPES  = ["HQL", "NATIVE_SQL", "ANNOTATION", "JDBC"]
+API_TYPES  = ["HQL", "NATIVE_SQL", "ANNOTATION", "JDBC", "YAML"]
 LANG_TYPES = ["HQL", "NATIVE_SQL", "AMBIGUOUS"]
 
 # Title + API/Lang correction + review fields + oracle toggle + IntelliJ button

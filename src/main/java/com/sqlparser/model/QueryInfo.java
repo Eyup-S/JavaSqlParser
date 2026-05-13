@@ -15,7 +15,8 @@ public class QueryInfo {
         HQL,           // createQuery() — JPQL/HQL
         NATIVE_SQL,    // createNativeQuery()
         ANNOTATION,    // @Query annotation
-        JDBC           // prepareStatement / executeQuery — raw JDBC
+        JDBC,          // prepareStatement / executeQuery — raw JDBC
+        YAML           // SQL string extracted from a YAML/YML configuration file
     }
 
     private String id;

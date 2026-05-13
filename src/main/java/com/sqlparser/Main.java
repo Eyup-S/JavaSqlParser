@@ -2,6 +2,7 @@ package com.sqlparser;
 
 import com.sqlparser.exporter.SqlExporter;
 import com.sqlparser.extractor.QueryExtractor;
+import com.sqlparser.extractor.YamlQueryExtractor;
 import com.sqlparser.importer.SqlImporter;
 import com.sqlparser.model.ScanConfig;
 import com.sqlparser.parser.ParserModule;
@@ -12,9 +13,12 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.LinkedHashMap;
+import java.util.Set;
 
 /**
  * Entry point for the Java SQL Parser tool.
@@ -101,6 +105,13 @@ public class Main {
         QueryExtractor extractor = new QueryExtractor(registry, config);
         extractor.extractAll(parsedFiles);
 
+        // 2b. YAML scan (opt-in with --yaml)
+        if (config.isScanYaml()) {
+            YamlQueryExtractor yamlExtractor = new YamlQueryExtractor(registry, config);
+            int yamlCount = yamlExtractor.extractAll(sourceDir);
+            log.info("YAML scan: {} queries registered", yamlCount);
+        }
+
         if (registry.size() == 0) {
             log.warn("No queries were found in {} (mode: {})", sourceDir, config.getMode());
         }
@@ -126,6 +137,11 @@ public class Main {
         System.out.printf("  Mode           : %s%n", config.getMode());
         System.out.printf("  Source         : %s%n", config.getSourceMode());
         System.out.printf("  Append         : %s%n", config.isAppendMode());
+        System.out.printf("  YAML scan      : %s%n", config.isScanYaml());
+        if (!config.getCustomHqlMethods().isEmpty())
+            System.out.printf("  Custom HQL     : %s%n", config.getCustomHqlMethods());
+        if (!config.getCustomNativeMethods().isEmpty())
+            System.out.printf("  Custom SQL     : %s%n", config.getCustomNativeMethods());
         System.out.printf("  Queries total  : %d%n", registry.size());
         System.out.printf("  Combined SQL   : %s%n", sqlOutput.toAbsolutePath());
         System.out.printf("  Registry JSON  : %s%n", registryJson.toAbsolutePath());
@@ -220,6 +236,10 @@ public class Main {
         QueryExtractor extractor = new QueryExtractor(registry, config);
         extractor.extractAll(parsedFiles);
 
+        if (config.isScanYaml()) {
+            new YamlQueryExtractor(registry, config).extractAll(sourceDir);
+        }
+
         SqlExporter exporter = new SqlExporter(registry);
         Path reportFile = outputDir.resolve("report.txt");
         exporter.exportReport(reportFile);
@@ -238,6 +258,9 @@ public class Main {
         ScanConfig.SourceMode sourceMode = ScanConfig.SourceMode.ALL;
         String excludePattern = null;
         boolean appendMode = false;
+        boolean scanYaml = false;
+        Set<String> customHqlMethods = new LinkedHashSet<>();
+        Set<String> customNativeMethods = new LinkedHashSet<>();
 
         for (String arg : args) {
             if (arg.startsWith("--mode=")) {
@@ -259,12 +282,24 @@ public class Main {
                 };
             } else if (arg.equals("--append")) {
                 appendMode = true;
+            } else if (arg.equals("--yaml")) {
+                scanYaml = true;
+            } else if (arg.startsWith("--custom-hql=")) {
+                String val = arg.substring("--custom-hql=".length()).trim();
+                Arrays.stream(val.split(",")).map(String::trim).filter(s -> !s.isEmpty())
+                      .forEach(customHqlMethods::add);
+            } else if (arg.startsWith("--custom-sql=")) {
+                String val = arg.substring("--custom-sql=".length()).trim();
+                Arrays.stream(val.split(",")).map(String::trim).filter(s -> !s.isEmpty())
+                      .forEach(customNativeMethods::add);
             } else if (arg.startsWith("--exclude=")) {
                 excludePattern = arg.substring("--exclude=".length());
             }
         }
 
-        return ScanConfig.of(mode, sourceMode, excludePattern, appendMode);
+        return ScanConfig.of(mode, sourceMode, excludePattern, appendMode, scanYaml,
+                customHqlMethods.isEmpty() ? null : customHqlMethods,
+                customNativeMethods.isEmpty() ? null : customNativeMethods);
     }
 
     /**
@@ -329,6 +364,15 @@ public class Main {
                                       locations — use when you want to add JDBC queries to an existing
                                       Hibernate-only registry without losing prior review state
 
+                  --yaml              Also scan .yaml/.yml files in the source directory for SQL strings
+                                      Uses the YAML key path as the method name (e.g. "queries.findAll.sql")
+
+                  --custom-hql=m1,m2  Treat these method names as HQL queries (first arg is HQL string)
+                                      e.g. --custom-hql=executeHql,runHqlQuery,findByHql
+
+                  --custom-sql=m1,m2  Treat these method names as native SQL queries (first arg is SQL)
+                                      e.g. --custom-sql=executeSql,runNative,executeNativeQuery
+
                   --exclude=<regex>   Skip Java files whose absolute path matches the regex
                                       Applied before parsing — entire file is excluded
                                       Examples:
@@ -348,6 +392,12 @@ public class Main {
 
                   # Second run — append JDBC queries to same registry
                   java -jar parser.jar extract src/main/java output --source=jdbc --append
+
+                  # Scan YAML files alongside Java
+                  java -jar parser.jar extract src/main/java output --yaml
+
+                  # Custom methods — detect your own HQL/SQL runner methods
+                  java -jar parser.jar extract src/main/java output --custom-hql=executeHql,runHql --custom-sql=executeSql,runNative
 
                   # Re-inject after ora2pg conversion
                   java -jar parser.jar replace src/main/java output/converted.sql output/registry.json

@@ -1,5 +1,7 @@
 package com.sqlparser.model;
 
+import java.util.Collections;
+import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 
@@ -39,30 +41,44 @@ public class ScanConfig {
     private ScanMode mode;
     private SourceMode sourceMode;
     private boolean appendMode;
+    private boolean scanYaml;
     private Pattern excludeFilePattern;
+    private Set<String> customHqlMethods;
+    private Set<String> customNativeMethods;
 
-    private ScanConfig(ScanMode mode, SourceMode sourceMode, boolean appendMode, Pattern excludeFilePattern) {
+    private ScanConfig(ScanMode mode, SourceMode sourceMode, boolean appendMode, boolean scanYaml,
+                       Pattern excludeFilePattern,
+                       Set<String> customHqlMethods, Set<String> customNativeMethods) {
         this.mode = mode;
         this.sourceMode = sourceMode;
         this.appendMode = appendMode;
+        this.scanYaml = scanYaml;
         this.excludeFilePattern = excludeFilePattern;
+        this.customHqlMethods = customHqlMethods != null ? customHqlMethods : Collections.emptySet();
+        this.customNativeMethods = customNativeMethods != null ? customNativeMethods : Collections.emptySet();
     }
 
     // ── Factory methods ───────────────────────────────────────────────────────
 
     public static ScanConfig allQueries() {
-        return new ScanConfig(ScanMode.ALL, SourceMode.ALL, false, null);
+        return new ScanConfig(ScanMode.ALL, SourceMode.ALL, false, false, null, null, null);
     }
 
     public static ScanConfig oracleOnly() {
-        return new ScanConfig(ScanMode.ORACLE_ONLY, SourceMode.ALL, false, null);
+        return new ScanConfig(ScanMode.ORACLE_ONLY, SourceMode.ALL, false, false, null, null, null);
     }
 
     public static ScanConfig of(ScanMode mode, String excludeRegex) {
-        return of(mode, SourceMode.ALL, excludeRegex, false);
+        return of(mode, SourceMode.ALL, excludeRegex, false, false, null, null);
     }
 
     public static ScanConfig of(ScanMode mode, SourceMode sourceMode, String excludeRegex, boolean appendMode) {
+        return of(mode, sourceMode, excludeRegex, appendMode, false, null, null);
+    }
+
+    public static ScanConfig of(ScanMode mode, SourceMode sourceMode, String excludeRegex,
+                                boolean appendMode, boolean scanYaml,
+                                Set<String> customHqlMethods, Set<String> customNativeMethods) {
         Pattern pattern = null;
         if (excludeRegex != null && !excludeRegex.isBlank()) {
             try {
@@ -71,7 +87,8 @@ public class ScanConfig {
                 throw new IllegalArgumentException("Invalid exclude pattern: " + excludeRegex, e);
             }
         }
-        return new ScanConfig(mode, sourceMode, appendMode, pattern);
+        return new ScanConfig(mode, sourceMode, appendMode, scanYaml, pattern,
+                customHqlMethods, customNativeMethods);
     }
 
     // ── Queries ───────────────────────────────────────────────────────────────
@@ -90,6 +107,18 @@ public class ScanConfig {
 
     public boolean isOracleOnly() {
         return mode == ScanMode.ORACLE_ONLY;
+    }
+
+    public boolean isScanYaml() {
+        return scanYaml;
+    }
+
+    public Set<String> getCustomHqlMethods() {
+        return customHqlMethods;
+    }
+
+    public Set<String> getCustomNativeMethods() {
+        return customNativeMethods;
     }
 
     public boolean includesHibernate() {
@@ -123,6 +152,9 @@ public class ScanConfig {
         return "ScanConfig{mode=" + mode +
                ", source=" + sourceMode +
                ", append=" + appendMode +
+               ", yaml=" + scanYaml +
+               ", customHql=" + customHqlMethods +
+               ", customSql=" + customNativeMethods +
                ", exclude=" + (excludeFilePattern != null ? excludeFilePattern.pattern() : "none") + "}";
     }
 }
