@@ -626,20 +626,17 @@ with col_orig:
 
 with col_ora2pg:
     st.markdown("**② ora2pg Output** *(auto-populated on import)*")
-    ora2pg_val = st.text_area(
-        label="ora2pg_output",
-        value=format_sql(get_field(q, "ora2pgSql")),
-        height=280,
-        placeholder="Import a converted SQL file from the sidebar to populate this automatically…",
-        label_visibility="collapsed",
-        key=f"ora2pg_{q['id']}",
-    )
+    ora2pg_val = get_field(q, "ora2pgSql")
+    if ora2pg_val:
+        st.code(format_sql(ora2pg_val), language="sql")
+    else:
+        st.caption("Import a converted SQL file from the sidebar to populate this automatically…")
 
 with col_final:
     st.markdown("**③ Final SQL** *(saved to registry — used by replace command)*")
 
     if st.button("⬅️ Accept ora2pg as final", use_container_width=True, key=f"accept_{q['id']}"):
-        st.session_state[f"final_sql_{q['id']}"] = ora2pg_val
+        st.session_state[f"final_sql_{q['id']}"] = format_sql(ora2pg_val)
 
     final_default = st.session_state.get(
         f"final_sql_{q['id']}",
