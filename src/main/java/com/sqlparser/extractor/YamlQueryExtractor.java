@@ -29,8 +29,9 @@ public class YamlQueryExtractor {
 
     private static final Logger log = LoggerFactory.getLogger(YamlQueryExtractor.class);
 
+    // Matches if any line in the value starts with a SQL keyword (handles multiline block scalars)
     private static final Pattern SQL_INDICATOR = Pattern.compile(
-            "(?s).*^\\s*(SELECT|INSERT|UPDATE|DELETE|MERGE|WITH|CALL|EXEC)\\b.*",
+            "^\\s*(SELECT|INSERT|UPDATE|DELETE|MERGE|WITH|CALL|EXEC)\\b",
             Pattern.CASE_INSENSITIVE | Pattern.MULTILINE);
 
     private final QueryRegistry registry;

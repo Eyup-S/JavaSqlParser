@@ -97,6 +97,9 @@ java -jar parser.jar report src/main/java output --mode=oracle-only
 | `--source=hibernate` | Scan only Hibernate/JPA sources (`createQuery`, `@Query`, etc.) |
 | `--source=jdbc` | Scan only JDBC sources (`prepareStatement`, `prepareCall`) |
 | `--append` | Load an existing `registry.json` first and add only new queries — skips locations already registered |
+| `--yaml` | Also scan `.yaml`/`.yml` files for SQL strings (see YAML Scanning section below) |
+| `--custom-hql=m1,m2` | Treat these method names as HQL queries (first argument is the HQL string) |
+| `--custom-sql=m1,m2` | Treat these method names as native SQL queries (first argument is the SQL string) |
 | `--exclude=<regex>` | Skip Java files whose absolute path matches the regex |
 
 **Exclude examples:**
@@ -117,6 +120,24 @@ java -jar parser.jar extract src/main/java output --source=hibernate
 java -jar parser.jar extract src/main/java output --source=jdbc --append
 ```
 
+**Custom method detection:**
+
+```bash
+# Your codebase has a custom query runner class with its own methods
+java -jar parser.jar extract src/main/java output \
+  --custom-hql=executeHql,runHqlQuery,findByHql \
+  --custom-sql=executeSql,runNative,executeNativeQuery
+```
+
+The scanner treats the first argument of each listed method as the query string, exactly like `createQuery` or `createNativeQuery`.
+
+**YAML scanning:**
+
+```bash
+# Scan Java sources + YAML/YML files in the same directory tree
+java -jar parser.jar extract src/main/java output --yaml
+```
+
 ---
 
 ## API and Language
@@ -131,6 +152,7 @@ Each extracted query gets two independent tags.
 | `HQL` | `createQuery(...)`, `createNamedQuery(...)`, `createSelectionQuery(...)` |
 | `ANNOTATION` | `@Query(...)`, `@NamedQuery(...)`, `@NamedNativeQuery(...)` |
 | `JDBC` | `prepareStatement(sql)`, `prepareCall(sql)` |
+| `YAML` | SQL string extracted from a `.yaml`/`.yml` file (enabled with `--yaml`) |
 
 ### Language — what the SQL string actually contains
 
@@ -154,6 +176,8 @@ The tool writes one SQL file per `api × lang` combination so you can process on
 | `annotation__hql.sql` | `@Query` with HQL | Skip — no conversion needed |
 | `hql__ambiguous.sql` | Cannot determine language | Review manually |
 | `jdbc__ambiguous.sql` | JDBC query, language unclear | Review manually |
+| `yaml__native_sql.sql` | SQL in YAML file, native SQL | Run ora2pg |
+| `yaml__ambiguous.sql` | SQL in YAML file, language unclear | Review manually |
 
 ### Language detection — how it works
 
@@ -184,6 +208,50 @@ If nothing matches → `AMBIGUOUS`
 - Mixed queries with both HQL and native fragments — first matching rule wins
 
 If the detected language is wrong, open the query in the visualization tool and correct **API Type** and **Language** manually before saving.
+
+---
+
+## YAML Scanning
+
+Enabled with the `--yaml` flag. Recursively scans every `.yaml` and `.yml` file in the source directory for SQL strings.
+
+**Detection rule:** any scalar string value that contains a line starting with `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `MERGE`, `WITH`, `CALL`, or `EXEC` is captured as a query.
+
+**Supported YAML structures:**
+
+```yaml
+# Top-level key — value is a multiline block scalar
+someQueryKey: |
+  select col1, col2
+  from some_table
+  where condition = :param
+
+# Nested under a mapping
+section:
+  anotherQuery: |
+    select col1, count(*)
+    from another_table
+    group by col1
+
+# Inside a list
+items:
+  - name: "item1"
+    itemQuery: |
+      select col1
+      from item_table
+      where active = 1
+```
+
+**Registry entries for the examples above:**
+
+| Field | Value |
+|-------|-------|
+| API Type | `YAML` |
+| Method | `popupQuery` / `reports.summaryQuery` / `popups[0].popupQuery` |
+| File | absolute path to the `.yaml` file |
+| Line | line number of the SQL string in the file |
+
+The YAML key path is used as the method name so queries are identifiable in the registry and visualization tool. Language detection (`NATIVE_SQL` / `HQL` / `AMBIGUOUS`) applies to YAML queries the same way as Java queries.
 
 ---
 
